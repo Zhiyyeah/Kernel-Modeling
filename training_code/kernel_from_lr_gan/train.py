@@ -11,34 +11,23 @@ if CURRENT_DIR not in sys.path:
 
 from networks import MultiBandLinearGenerator, PatchDiscriminator
 from loss import lsgan_d_loss, lsgan_g_loss, kernel_regularization
-from data import load_nc_to_5band, sample_patches, load_patches_from_folder, sample_patches_from_files
+from training_code.kernel_from_lr_gan.data_single_GOCI import load_patches_from_folder, sample_patches_from_files
 
 
 def main():
-    # 训练模式选择
-    use_patch_folder = True  # True: 使用预先生成的patch文件夹; False: 从单个NC文件采样
-    
-    # 仅支持 nc 输入的无监督 KernelGAN 训练（5 波段）
+    # 无监督 KernelGAN 训练（5 波段）- 从patch文件夹采样
     use_cpu = True
     device = torch.device('cuda' if torch.cuda.is_available() and not use_cpu else 'cpu')
     print(f'Using device: {device}')
 
     # 数据路径配置
-    if use_patch_folder:
-        # 使用预先生成的patch文件夹
-        patch_dir = '/Users/zy/Downloads/GOCI-2/patches_all'
-        print(f'使用patch文件夹模式: {patch_dir}')
-        patch_files, original_patch_size = load_patches_from_folder(patch_dir)
-    else:
-        # 使用单个NC文件采样
-        nc_path = '/Users/zy/Python_code/My_Git/match_cor/output/img/4_landmasked/GK2_GOCI2_L1B_20210330_021530_LA_S007_subset_footprint_landmasked.nc'
-        print(f'使用NC文件模式: {nc_path}')
-        if not os.path.exists(nc_path):
-            print('错误：NC文件不存在')
-            return
+    patch_dir = '/Users/zy/Downloads/GOCI-2/patches_all'
+    print(f'使用patch文件夹模式: {patch_dir}')
+    patch_files, original_patch_size = load_patches_from_folder(patch_dir)
+    
     # 训练配置
     iters = 3000
-    patch_size = 64
+    patch_size = 16
     batch_size = 8
     lr_rate = 1e-4
     outdir = './kernelgan_out'
@@ -48,20 +37,10 @@ def main():
     save_intermediate = True     # 是否保存中间核
     verbose = True               # 是否输出权重/梯度等详细信息
 
-    # 根据模式加载数据
-    if use_patch_folder:
-        # patch文件夹模式：不需要加载整张图像
-        img = None
-        valid_mask = None
-        print(f'Patch文件夹模式，将从 {len(patch_files)} 个文件中随机采样')
-        print(f'原始patch尺寸: {original_patch_size}x{original_patch_size}')
-        print(f'目标patch尺寸: {patch_size}x{patch_size}')
-    else:
-        # NC文件模式：读取完整图像
-        img, valid_mask = load_nc_to_5band(nc_path)
-        img = img.to(device)
-        valid_mask = valid_mask.to(device)
-        print(f'影像尺寸: {tuple(img.shape)}, 有效像素比例: {valid_mask.float().mean():.2%}')
+    # 加载数据
+    print(f'将从 {len(patch_files)} 个文件中随机采样')
+    print(f'原始patch尺寸: {original_patch_size}x{original_patch_size}')
+    print(f'目标patch尺寸: {patch_size}x{patch_size}')
 
     # 模型（生成器输入 5 通道，输出 5 通道；判别器接受 5 通道）
     G = MultiBandLinearGenerator(in_ch=5, mid_ch_ch=32) if False else MultiBandLinearGenerator(in_ch=5, mid_ch=32)
@@ -160,19 +139,14 @@ def main():
     prev_k = None  # 用于计算核变化幅度
 
     for t in range(iters):
-        # 采样补丁 [B,5,P,P]
-        if use_patch_folder:
-            # 从patch文件中采样
-            patches = sample_patches_from_files(
-                patch_files=patch_files,
-                batch_size=batch_size,
-                target_size=patch_size,
-                original_size=original_patch_size,
-                device=device
-            )
-        else:
-            # 从完整图像中采样（避开无效区域）
-            patches = sample_patches(img=img, patch_size=patch_size, batch_size=batch_size, valid_mask=valid_mask)
+        # 从patch文件中采样 [B,5,P,P]
+        patches = sample_patches_from_files(
+            patch_files=patch_files,
+            batch_size=batch_size,
+            target_size=patch_size,
+            original_size=original_patch_size,
+            device=device
+        )
         
         # 真实下采样保持 5 通道；生成器输出亦为 5 通道
         real_ds = torch.nn.functional.avg_pool2d(input=patches, kernel_size=2, stride=2)  # [B,5,P/2,P/2]
@@ -225,6 +199,8 @@ def main():
             if save_intermediate:
                 os.makedirs(outdir, exist_ok=True)
                 np.save(os.path.join(outdir, f'kernel_iter{t+1}.npy'), k_merged.cpu().numpy())
+                # 同时保存分波段核
+                np.save(os.path.join(outdir, f'kernel_per_band_iter{t+1}.npy'), ks_all.cpu().numpy())
 
     # 提取并保存最终核
     ks_final = G.extract_effective_kernels().cpu().numpy()

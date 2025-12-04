@@ -34,20 +34,21 @@ class MultiBandLinearGenerator(nn.Module):
             convs.append(nn.Conv2d(in_channels=mid_ch, out_channels=1, kernel_size=ks[-1], stride=1, padding=ks[-1]//2, bias=False))
             chains.append(convs)
         self.chains = nn.ModuleList(chains)
-        self.down = nn.AvgPool2d(kernel_size=2, stride=2)
+        # 8倍下采样：3个2倍下采样级联 (2 * 2 * 2 = 8)
+        self.down1 = nn.AvgPool2d(kernel_size=2, stride=2)
+        self.down2 = nn.AvgPool2d(kernel_size=2, stride=2)
+        self.down3 = nn.AvgPool2d(kernel_size=2, stride=2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        前向传播：对每个波段独立应用线性卷积链，再下采样。
-
+        前向传播：对每个波段独立应用线性卷积链，再进行8倍下采样。
         参数:
             x (torch.Tensor): 输入图像，形状 [B, C, H, W]，其中:
                 - B: batch size
                 - C: 波段数（通道数），与 in_ch 一致
                 - H, W: 图像高度和宽度
-
         返回:
-            torch.Tensor: 下采样后的 5 通道输出，形状 [B, 5, H/2, W/2]。
+            torch.Tensor: 8倍下采样后的 5 通道输出，形状 [B, 5, H/8, W/8]。
         """
         # x: [B,C,H,W]
         outs = []
@@ -55,9 +56,12 @@ class MultiBandLinearGenerator(nn.Module):
             h = x[:, c:c+1]
             for conv in self.chains[c]:
                 h = conv(h)
-            h = self.down(h)  # [B,1,H/2,W/2]
+            # 8倍下采样：连续进行3次2倍下采样
+            h = self.down1(h)  # [B,1,H/2,W/2]
+            h = self.down2(h)  # [B,1,H/4,W/4]
+            h = self.down3(h)  # [B,1,H/8,W/8]
             outs.append(h)
-        # 保留 5 通道输出: [B,5,H/2,W/2]
+        # 保留 5 通道输出: [B,5,H/8,W/8]
         return torch.cat(tensors=outs, dim=1)
 
     @torch.no_grad()
@@ -115,7 +119,6 @@ class MultiBandLinearGenerator(nn.Module):
     def extract_merged_kernel(self) -> torch.Tensor:
         """
         提取跨波段平均的合并核（用于快速查看整体退化）。
-
         返回:
             torch.Tensor: 合并后的单个核，形状 [kH, kW]，
                 对所有波段核取平均得到，已归一化（和为 1）。
@@ -169,8 +172,8 @@ if __name__ == "__main__":
     G = MultiBandLinearGenerator(in_ch=5).to(device)
     D = PatchDiscriminator(in_ch=5).to(device)
     x = torch.rand(20, 5, 64, 64, device=device)
-    y = G(x)              # [20,5,32,32]
-    s = D(y)              # [20,1,32,32]
+    y = G(x)              # [20,5,8,8] (64/8=8)
+    s = D(y)              # [20,1,8,8]
     ks = G.extract_effective_kernels()  # [5,kH,kW]
     km = G.extract_merged_kernel()      # [kH,kW]
     print(f"G out: {tuple(y.shape)} | D out: {tuple(s.shape)} | kernels: {tuple(ks.shape)} merged: {tuple(km.shape)} sum(merged)={km.sum().item():.4f}")
