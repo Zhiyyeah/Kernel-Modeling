@@ -62,7 +62,7 @@ def visualize_single_kernel(kernel, title, output_path=None):
         output_path = title.replace('.npy', '_visualization.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"可视化已保存至: {output_path}")
-    plt.show()
+    #plt.show()
 
 
 def visualize_multiband_kernels(kernels, title, output_path=None):

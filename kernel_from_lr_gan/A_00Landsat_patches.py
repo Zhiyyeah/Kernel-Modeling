@@ -13,7 +13,7 @@ PATCH_SIZE = 128  # 与GOCI处理保持一致
 
 def create_patches(data, patch_size=PATCH_SIZE, nan_threshold=0.0, output_dir=None, prefix='patch'):
     """
-    将数据划分成patch并过滤掉NaN过多的patch
+    将数据划分成patch并过滤掉NaN过多的patch，输出为NC文件
     
     参数:
         data (np.ndarray): 输入数据 [C, H, W] 或 [H, W]
@@ -46,6 +46,8 @@ def create_patches(data, patch_size=PATCH_SIZE, nan_threshold=0.0, output_dir=No
     print(f"Patch大小: {patch_size}x{patch_size}")
     print(f"可生成的patch网格: {h_patches}x{w_patches} = {h_patches*w_patches}个")
     
+    band_names = ['L_TOA_443', 'L_TOA_490', 'L_TOA_555', 'L_TOA_660', 'L_TOA_865']
+    
     for i in range(h_patches):
         for j in range(w_patches):
             total_patches += 1
@@ -68,12 +70,34 @@ def create_patches(data, patch_size=PATCH_SIZE, nan_threshold=0.0, output_dir=No
             kept_patches += 1
             patches.append(patch)
             
-            # 保存patch
+            # 保存patch为NC文件
             if output_dir is not None:
                 os.makedirs(output_dir, exist_ok=True)
-                patch_filename = f"{prefix}_{i:03d}_{j:03d}.npy"
+                patch_filename = f"{prefix}_{i:03d}_{j:03d}.nc"
                 patch_path = os.path.join(output_dir, patch_filename)
-                np.save(patch_path, patch)
+                
+                # 创建NC文件
+                with Dataset(patch_path, 'w', format='NETCDF4') as ds:
+                    # 创建维度
+                    ds.createDimension('band', channels)
+                    ds.createDimension('y', patch_size)
+                    ds.createDimension('x', patch_size)
+                    
+                    # 创建组结构
+                    grp_hr = ds.createGroup('hr')
+                    
+                    # 创建每个波段的变量
+                    for c in range(channels):
+                        band_name = band_names[c] if c < len(band_names) else f'band_{c}'
+                        var = grp_hr.createVariable(band_name, 'f4', ('y', 'x'), zlib=True)
+                        var[:] = patch[c, :, :]
+                        var.long_name = f"TOA Radiance at {band_name.split('_')[-1]} nm"
+                        var.units = "W m-2 sr-1 um-1"
+                    
+                    # 添加全局属性
+                    ds.title = f"Landsat Patch {i:03d}_{j:03d}"
+                    ds.patch_size = patch_size
+                    ds.n_bands = channels
     
     print(f"总共生成: {total_patches}个patch")
     print(f"保留: {kept_patches}个patch (丢弃了{total_patches-kept_patches}个NaN过多的patch)")
