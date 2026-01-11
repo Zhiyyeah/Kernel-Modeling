@@ -10,7 +10,7 @@
 
 import os
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from math import ceil, sqrt
 
 import numpy as np
@@ -39,23 +39,24 @@ INVALID_VALUE = -9999.0  # NetCDF 中的无效值标记
 # ============================================================================
 # 核心函数
 # ============================================================================
-def read_nc_bands(nc_path: str) -> Tuple[np.ndarray, dict]:
+def read_nc_bands(nc_path: str) -> Tuple[np.ndarray, Dict]:
     """
-    读取 NetCDF 文件中的所有波段数据。
+    读取 NetCDF 文件中的所有波段数据和导航数据。
     
     参数:
         nc_path: NetCDF 文件路径
     
     返回:
         data: [5, H, W] 的数组
-        metadata: 包含原始文件信息的字典
+        metadata: 包含原始文件信息、导航数据等的字典
     """
     with Dataset(nc_path, 'r') as ds:
-        grp = ds.groups['geophysical_data']
+        # 读取 geophysical_data 组
+        geo_grp = ds.groups['geophysical_data']
         
         all_bands_data = []
         for band_name in BAND_NAMES:
-            data = grp.variables[band_name][:]
+            data = geo_grp.variables[band_name][:]
             # 处理 MaskedArray
             if isinstance(data, np.ma.MaskedArray):
                 data = data.filled(fill_value=INVALID_VALUE)
@@ -64,11 +65,22 @@ def read_nc_bands(nc_path: str) -> Tuple[np.ndarray, dict]:
         # 堆叠成 [5, H, W]
         all_bands = np.stack(arrays=all_bands_data, axis=0)
         
+        # 读取 navigation_data 组（如果存在）
+        navigation_data = {}
+        if 'navigation_data' in ds.groups:
+            nav_grp = ds.groups['navigation_data']
+            for var_name in nav_grp.variables:
+                var_data = nav_grp.variables[var_name][:]
+                if isinstance(var_data, np.ma.MaskedArray):
+                    var_data = var_data.filled(fill_value=INVALID_VALUE)
+                navigation_data[var_name] = var_data.astype(np.float32)
+        
         # 提取元数据
         metadata = {
             'source_file': os.path.basename(nc_path),
             'band_names': BAND_NAMES,
-            'invalid_value': INVALID_VALUE
+            'invalid_value': INVALID_VALUE,
+            'navigation_data': navigation_data
         }
         
         return all_bands, metadata
@@ -188,45 +200,64 @@ def create_patches_nc(
 def save_patch_as_nc(
     patch: np.ndarray,
     output_path: str,
-    metadata: dict,
+    metadata: Dict,
     grid_i: int,
     grid_j: int,
     h_offset: int,
     w_offset: int
 ) -> None:
     """
-    将单个 patch 保存为 NetCDF 文件。
+    将单个 patch 保存为 NetCDF 文件，保持 geophysical_data 和 navigation_data 分组结构。
     
     参数:
         patch: [C, H, W] 的 patch 数据
         output_path: 输出文件路径
-        metadata: 元数据字典
+        metadata: 元数据字典（包含 navigation_data）
         grid_i: 网格行索引
         grid_j: 网格列索引
         h_offset: 垂直偏移量
         w_offset: 水平偏移量
     """
     channels, height, width = patch.shape
+    band_names = metadata.get('band_names', BAND_NAMES)
     
     with Dataset(output_path, 'w', format='NETCDF4') as ds:
-        # 创建维度
-        ds.createDimension('bands', channels)
+        # 创建维度（在根级别）
         ds.createDimension('y', height)
         ds.createDimension('x', width)
         
-        # 创建变量
-        data_var = ds.createVariable('data', 'f4', ('bands', 'y', 'x'))
-        data_var[:] = patch
-        
-        # 添加元数据
+        # 添加根级别的全局属性
         ds.source_file = metadata.get('source_file', 'unknown')
-        ds.band_names = ','.join(metadata.get('band_names', []))
         ds.invalid_value = metadata.get('invalid_value', -9999.0)
         ds.grid_i = grid_i
         ds.grid_j = grid_j
         ds.h_offset = h_offset
         ds.w_offset = w_offset
         ds.patch_size = height
+        ds.description = 'Patch extracted from Landsat/GOCI-2 L1B data'
+        
+        # 创建 geophysical_data 组
+        geo_grp = ds.createGroup('geophysical_data')
+        
+        # 在 geophysical_data 组中保存所有波段
+        for i, band_name in enumerate(band_names):
+            var = geo_grp.createVariable(band_name, 'f4', ('y', 'x'))
+            var[:] = patch[i]
+            var.long_name = f'{band_name} radiance'
+            var.units = 'W m⁻² sr⁻¹ μm⁻¹'
+        
+        # 创建 navigation_data 组并保存导航数据（如果存在）
+        navigation_data = metadata.get('navigation_data', {})
+        if navigation_data:
+            nav_grp = ds.createGroup('navigation_data')
+            
+            for nav_var_name, nav_var_data in navigation_data.items():
+                # 裁剪 navigation 数据到当前 patch 区域
+                if nav_var_data.ndim == 2:
+                    nav_patch = nav_var_data[h_offset:h_offset+height, w_offset:w_offset+width]
+                    var = nav_grp.createVariable(nav_var_name, 'f4', ('y', 'x'))
+                    var[:] = nav_patch
+                    var.long_name = f'Navigation: {nav_var_name}'
 
 
 def visualize_nir_overview(
