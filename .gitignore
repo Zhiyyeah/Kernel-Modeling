@@ -1,3 +1,6 @@
 *.pyc
 kernel_from_lr_gan/__pycache__/
 landsat_lr_output/
+*npy
+*txt
+*.log

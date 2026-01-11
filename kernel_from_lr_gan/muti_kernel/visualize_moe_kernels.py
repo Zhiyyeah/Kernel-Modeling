@@ -71,7 +71,7 @@ for band_idx in range(5):
 
 plt.tight_layout()
 plt.savefig('./moe_kernels/kernel_0_bands_detail.png', dpi=150, bbox_inches='tight')
-print("✓ Saved kernel_0_bands_detail.png")
+print("Saved kernel_0_bands_detail.png")
 plt.show()
 
 # ==========================================
@@ -160,3 +160,87 @@ for band_idx in range(5):
 print("\n" + "="*60)
 print("All visualizations saved to: ./moe_kernels/")
 print("="*60)
+
+# ==========================================
+# 6. 噪声可视化（单独）
+# ==========================================
+# 6.1 噪声箱线图（每核 × 5 波段）
+fig, ax = plt.subplots(figsize=(10, 5))
+data_for_box = [sigmas[i] for i in range(sigmas.shape[0])]
+bp = ax.boxplot(data_for_box, labels=[f'K{i}' for i in range(sigmas.shape[0])], patch_artist=True)
+for patch in bp['boxes']:
+    patch.set_facecolor('lightblue')
+    patch.set_alpha(0.7)
+ax.set_ylabel('Sigma', fontsize=12, fontweight='bold')
+ax.set_title('Noise Sigma per Kernel (Boxplot across 5 bands)', fontsize=13, fontweight='bold')
+ax.grid(axis='y', alpha=0.3)
+plt.tight_layout()
+plt.savefig('./moe_kernels/noise_box_per_kernel.png', dpi=150, bbox_inches='tight')
+print("✓ Saved noise_box_per_kernel.png")
+plt.show()
+
+# 6.2 噪声热力图：核 × 波段
+fig, ax = plt.subplots(figsize=(8, 5))
+im = ax.imshow(sigmas, cmap='YlOrRd', aspect='auto')
+ax.set_xlabel('Band', fontsize=12, fontweight='bold')
+ax.set_ylabel('Kernel', fontsize=12, fontweight='bold')
+ax.set_title('Noise Sigma Heatmap (Kernels × Bands)', fontsize=13, fontweight='bold')
+ax.set_xticks(range(5))
+ax.set_xticklabels([f'B{i}' for i in range(5)])
+ax.set_yticks(range(sigmas.shape[0]))
+ax.set_yticklabels([f'K{i}' for i in range(sigmas.shape[0])])
+plt.colorbar(im, ax=ax, label='Sigma')
+plt.tight_layout()
+plt.savefig('./moe_kernels/noise_heatmap.png', dpi=150, bbox_inches='tight')
+print("✓ Saved noise_heatmap.png")
+plt.show()
+
+# 6.3 噪声直方图：所有核、所有波段展开
+fig, ax = plt.subplots(figsize=(8, 4))
+flat_sigma = sigmas.flatten()
+ax.hist(flat_sigma, bins=40, color='steelblue', alpha=0.8)
+ax.set_title('Histogram of All Noise Sigmas', fontsize=13, fontweight='bold')
+ax.set_xlabel('Sigma value')
+ax.set_ylabel('Count')
+ax.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig('./moe_kernels/noise_hist_all.png', dpi=150, bbox_inches='tight')
+print("✓ Saved noise_hist_all.png")
+plt.show()
+
+# ==========================================
+# 6. 核/噪声的两两差异矩阵（L2 距离）
+# ==========================================
+kernel_flat = kernels.reshape(kernels.shape[0], -1)
+kernel_diff = np.linalg.norm(kernel_flat[:, None, :] - kernel_flat[None, :, :], axis=-1)
+
+sigma_flat = sigmas.reshape(sigmas.shape[0], -1)
+sigma_diff = np.linalg.norm(sigma_flat[:, None, :] - sigma_flat[None, :, :], axis=-1)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+im0 = axes[0].imshow(kernel_diff, cmap='magma')
+axes[0].set_title('Pairwise L2 Distance of Kernels')
+axes[0].set_xlabel('Kernel idx')
+axes[0].set_ylabel('Kernel idx')
+plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
+
+im1 = axes[1].imshow(sigma_diff, cmap='magma')
+axes[1].set_title('Pairwise L2 Distance of Noise Sigmas')
+axes[1].set_xlabel('Kernel idx')
+axes[1].set_ylabel('Kernel idx')
+plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+
+plt.tight_layout()
+plt.savefig('./moe_kernels/pairwise_distance.png', dpi=150, bbox_inches='tight')
+print("✓ Saved pairwise_distance.png")
+plt.show()
+
+print("\n核方差（展平后）:")
+for i in range(kernels.shape[0]):
+    var = kernel_flat[i].var()
+    print(f"  Kernel {i}: var={var:.6e}")
+
+print("\n噪声方差（展平后）:")
+for i in range(sigmas.shape[0]):
+    var = sigma_flat[i].var()
+    print(f"  Sigma {i}: var={var:.6e}")
