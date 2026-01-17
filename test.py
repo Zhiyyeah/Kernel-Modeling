@@ -1,5 +1,5 @@
 import numpy as np
+import netCDF4 as nc
 
-arr= np.load("D:\Py_Code\Kernel-Modeling-Super-Resolution\denoise\denoise_results\L_TOA_490_clean.npy")
-print(arr.shape)
-print(f"arr.min() = {arr.min():.3f}, arr.max() = {arr.max():.3f}")
+arr= nc.Dataset(r"H:\Landsat\patch_output_nc\patches\LC08_L1TP_116035_20240829_20240905_02_T1_TOA_RAD_B1-2-3-4-5_native_002_013.nc")
+print(arr.geophysical_data.variables)

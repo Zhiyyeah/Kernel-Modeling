@@ -9,3 +9,11 @@
 🔸 组: navigation_data
    1. latitude
    2. longitude
+
+00_check_nc.py用法：
+python 00_check_nc.py 
+
+
+进行批量去噪处理的时候，GOCI-2 的h_factor是1.8，Landsat-8/9的h_factor是1.0
+
+

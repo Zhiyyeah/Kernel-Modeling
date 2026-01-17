@@ -118,7 +118,11 @@ def visualize_multiband_kernels(kernels, title, output_path=None):
 
 if __name__ == "__main__":
     # 使用示例
-    kernel_dir = 'kernelgan_out'
+    kernel_dir = 'output\kernelgan_out_denoised_single_kernel'
+    output_dir = os.path.join(kernel_dir, 'vis')  # 可视化图片保存目录
+    
+    # 创建输出目录
+    os.makedirs(output_dir, exist_ok=True)
     
     # 查找核文件
     kernel_files = sorted(glob.glob(os.path.join(kernel_dir, '*.npy')))
@@ -127,9 +131,13 @@ if __name__ == "__main__":
         print(f"在 {kernel_dir} 中没有找到 .npy 文件")
     else:
         print(f"找到 {len(kernel_files)} 个核文件\n")
+        print(f"可视化结果将保存到: {output_dir}\n")
         
         # 可视化每个核文件
         for kernel_file in kernel_files:
             print("=" * 60)
-            visualize_kernels(kernel_file)
+            # 构造输出路径
+            base_name = os.path.basename(kernel_file).replace('.npy', '_visualization.png')
+            output_path = os.path.join(output_dir, base_name)
+            visualize_kernels(kernel_file, output_path)
             print()

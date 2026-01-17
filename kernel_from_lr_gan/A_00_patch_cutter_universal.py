@@ -439,8 +439,8 @@ def main():
     主函数：配置路径并执行处理。
     """
     # ========== 配置区 ==========
-    INPUT_FOLDER = r"H:\GOCI-2"  # 输入文件夹路径（包含 .nc 文件）
-    OUTPUT_FOLDER = r"H:\GOCI-2\patch_output_nc"  # 输出文件夹路径
+    INPUT_FOLDER = r"H:\Landsat"  # 输入文件夹路径（包含 .nc 文件）
+    OUTPUT_FOLDER = r"H:\Landsat\patch_output_nc"  # 输出文件夹路径
     CREATE_VISUALIZATION = True  # 是否生成可视化图
     
     # 打印配置

@@ -5,6 +5,11 @@ import matplotlib.pyplot as plt
 import xarray as xr
 from skimage.restoration import denoise_nl_means, estimate_sigma
 
+'''
+去噪处理模块
+输入的是.nc文件，输出去噪后的.nc文件
+'''
+
 # ==========================================
 # 1. 核心读取与去噪功能 (保持不变)
 # ==========================================
