@@ -287,8 +287,7 @@ def main():
                 beta=0.5,     # Boundaries
                 gamma=5.0,    # Sparse
                 delta=1.0,    # Center
-                epsilon=3.0,  # CenterMax - 强制中心点最大
-                zeta=4.0      # Concentration - 强制中心区域集中
+                epsilon=3.0   # CenterMax - 强制中心点最大
             ))
         loss_reg = torch.mean(input=torch.stack(tensors=reg_list))
         k = ks_band.mean(dim=0)  # 用于后续单核统计（合并核）

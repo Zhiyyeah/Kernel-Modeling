@@ -11,6 +11,8 @@ import torch
 import torch.nn.functional as F
 from netCDF4 import Dataset
 import matplotlib.pyplot as plt
+from tqdm import tqdm
+import shutil
 
 
 def load_kernel(kernel_path):
@@ -43,7 +45,7 @@ def load_landsat_nc(nc_path):
     # 读取NC文件
     with Dataset(nc_path, 'r') as ds:
         # 固定读取 hr 组及其规定的波段
-        grp = ds.groups['hr']
+        grp = ds.groups['denoised']
         band_names = ['L_TOA_443', 'L_TOA_490', 'L_TOA_555', 'L_TOA_660', 'L_TOA_865']
         all_bands_data = []
 
@@ -63,17 +65,17 @@ def load_landsat_nc(nc_path):
     return img_tensor, band_names
 
 
-def apply_kernel_degradation(img, kernel, downscale_factor=8):
+def apply_kernel_degradation(img, kernel, downscale_factor: int = 8):
     """
-    使用模糊核对影像进行降分辨率处理
+    使用模糊核对影像进行模糊，并下采样（默认 8 倍，256->32）。
     
     参数:
         img (torch.Tensor): 输入影像 [C, H, W]
         kernel (torch.Tensor): 模糊核 [C, kH, kW] 或 [kH, kW]
-        downscale_factor (int): 下采样倍数，默认8
+        downscale_factor (int): 下采样倍数，默认8。
     
     返回:
-        torch.Tensor: 降分辨率影像 [C, H//downscale_factor, W//downscale_factor]
+        torch.Tensor: 模糊并下采样后的影像 [C, H/downscale_factor, W/downscale_factor]
     """
     C, H, W = img.shape
     
@@ -113,13 +115,13 @@ def apply_kernel_degradation(img, kernel, downscale_factor=8):
         padding=0,
         groups=C
     )  # [1, C, H, W]
-    
-    # 下采样
+
+    # 下采样：连续 2x 平均池化实现 8x 缩放
     lr_img = blurred
     for _ in range(int(np.log2(downscale_factor))):
         lr_img = F.avg_pool2d(lr_img, kernel_size=2, stride=2)
-    
-    return lr_img.squeeze(0)  # [C, H//downscale_factor, W//downscale_factor]
+
+    return lr_img.squeeze(0)  # [C, H/downscale_factor, W/downscale_factor]
 
 
 def process_landsat_folder(landsat_dir, kernel_path, output_dir):
@@ -147,7 +149,7 @@ def process_landsat_folder(landsat_dir, kernel_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     
     # 处理每个文件
-    for idx, nc_file in enumerate(nc_files):
+    for idx, nc_file in enumerate(tqdm(nc_files, desc='Applying kernel', unit='file')):
         print(f"\n{'='*60}")
         print(f"处理 [{idx+1}/{len(nc_files)}]: {os.path.basename(nc_file)}")
         print('='*60)
@@ -156,49 +158,48 @@ def process_landsat_folder(landsat_dir, kernel_path, output_dir):
             # 读取Landsat数据
             img, band_names = load_landsat_nc(nc_file)
             
-            # 应用模糊核降分辨率
-            lr_img = apply_kernel_degradation(img, kernel, downscale_factor=8)
+            # 应用模糊核（不再下采样），仅保存模糊结果
+            blurred_img = apply_kernel_degradation(img, kernel, downscale_factor=8)
             
-            print(f"降分辨率结果: {img.shape} -> {lr_img.shape}")
+            print(f"模糊+下采样结果: {img.shape} -> {blurred_img.shape}")
             
-            # 将LR数据添加到原始NC文件中（不改变文件名）
-            nc_path_abs = os.path.abspath(nc_file)
+            # 构造输出文件名：原始文件名 + _blurred.nc
+            base_name = os.path.splitext(os.path.basename(nc_file))[0]
+            new_nc_path = os.path.join(output_dir, f"{base_name}_blurred.nc")
             
-            # 打开原始NC文件进行编辑
-            with Dataset(nc_path_abs, 'a', format='NETCDF4') as ds:
-                # 检查lr组是否已存在
-                if 'lr' not in ds.groups:
-                    # 在顶层创建维度（NetCDF4组共享顶层维度）
-                    if 'y_lr' not in ds.dimensions:
-                        ds.createDimension('y_lr', lr_img.shape[1])
-                    if 'x_lr' not in ds.dimensions:
-                        ds.createDimension('x_lr', lr_img.shape[2])
-                    
-                    # 创建lr组
-                    grp_lr = ds.createGroup('lr')
-                else:
-                    grp_lr = ds.groups['lr']
-                
-                # 将LR数据保存到lr组中
-                lr_data = lr_img.numpy()
-                for c, band_name in enumerate(band_names[:lr_img.shape[0]]):
-                    if band_name not in grp_lr.variables:
-                        # 使用顶层维度创建变量
-                        var = grp_lr.createVariable(band_name, 'f4', ('y_lr', 'x_lr'), zlib=True)
+            # 复制原始文件到新路径后再写入（避免覆盖原文件）
+            shutil.copy(nc_file, new_nc_path)
+            
+            # 打开新NC文件进行编辑
+            with Dataset(new_nc_path, 'a', format='NETCDF4') as ds:
+                # -------- 保存模糊后的影像到 blurred 组 --------
+                # 创建 blurred 维度（下采样后尺寸，如 32x32）
+                if 'y_blurred' not in ds.dimensions:
+                    ds.createDimension('y_blurred', blurred_img.shape[1])
+                if 'x_blurred' not in ds.dimensions:
+                    ds.createDimension('x_blurred', blurred_img.shape[2])
+
+                # 创建或获取 blurred 组
+                grp_blur = ds.groups['blurred'] if 'blurred' in ds.groups else ds.createGroup('blurred')
+
+                blurred_data = blurred_img.numpy()
+                for c, band_name in enumerate(band_names[:blurred_img.shape[0]]):
+                    if band_name not in grp_blur.variables:
+                        var = grp_blur.createVariable(band_name, 'f4', ('y_blurred', 'x_blurred'), zlib=True)
                     else:
-                        var = grp_lr.variables[band_name]
-                    var[:] = lr_data[c, :, :]
-                    var.long_name = f"TOA Radiance at {band_name.split('_')[-1]} nm (LR)"
+                        var = grp_blur.variables[band_name]
+                    var[:] = blurred_data[c, :, :]
+                    var.long_name = f"Blurred TOA Radiance at {band_name.split('_')[-1]} nm"
                     var.units = "W m-2 sr-1 um-1"
-                
+
                 # 添加或更新全局属性
-                ds.history = f"Original HR patch with added LR (8x downsampled) group. Generated by applying Gaussian blur kernel and 8x downsampling"
+                ds.history = f"Original HR patch with added blurred group (applied blur kernel, 8x downsampled)"
             
-            print(f"已更新: {nc_path_abs}")
+            print(f"已保存: {new_nc_path}")
             
-            # 可视化对比（可选）
-            if idx < 30:  # 只可视化前3个
-                visualize_comparison(img, lr_img, band_names, output_dir, 
+            # 可视化对比（可选）：HR vs Blurred (downsampled)
+            if idx < 30:  # 只可视化前30个
+                visualize_comparison(img, blurred_img, band_names, output_dir, 
                                     os.path.basename(nc_file).replace('.nc', ''))
         
         except Exception as e:
@@ -212,13 +213,13 @@ def process_landsat_folder(landsat_dir, kernel_path, output_dir):
     print('='*60)
 
 
-def visualize_comparison(hr_img, lr_img, band_names, output_dir, filename_prefix):
+def visualize_comparison(hr_img, blurred_img, band_names, output_dir, filename_prefix):
     """
-    可视化高分辨率和低分辨率影像对比
+    可视化高分辨率与模糊后(下采样)影像的对比
     
     参数:
         hr_img (torch.Tensor): 高分辨率影像 [C, H, W]
-        lr_img (torch.Tensor): 低分辨率影像 [C, H_lr, W_lr]
+        blurred_img (torch.Tensor): 模糊后影像（已下采样） [C, H_d, W_d]
         band_names (list): 波段名称
         output_dir (str): 输出目录
         filename_prefix (str): 文件名前缀
@@ -231,11 +232,11 @@ def visualize_comparison(hr_img, lr_img, band_names, output_dir, filename_prefix
         axes = axes.reshape(2, 1)
     
     for i in range(n_show):
-        # 计算该波段的全局范围（HR和LR的联合范围）
+        # 计算该波段的全局范围（HR和模糊的联合范围）
         hr_band = hr_img[i].numpy()
-        lr_band = lr_img[i].numpy()
-        vmin = min(hr_band.min(), lr_band.min())
-        vmax = max(hr_band.max(), lr_band.max())
+        blur_band = blurred_img[i].numpy()
+        vmin = min(hr_band.min(), blur_band.min())
+        vmax = max(hr_band.max(), blur_band.max())
         
         # 高分辨率
         ax = axes[0, i]
@@ -244,14 +245,14 @@ def visualize_comparison(hr_img, lr_img, band_names, output_dir, filename_prefix
         ax.axis('off')
         plt.colorbar(im, ax=ax, fraction=0.046)
         
-        # 低分辨率
+        # 模糊后
         ax = axes[1, i]
-        im = ax.imshow(lr_band, cmap='viridis', interpolation='nearest', vmin=vmin, vmax=vmax)
-        ax.set_title(f'LR - {band_names[i]}\n{lr_band.shape}', fontsize=12, fontweight='bold')
+        im = ax.imshow(blur_band, cmap='viridis', interpolation='nearest', vmin=vmin, vmax=vmax)
+        ax.set_title(f'Blurred - {band_names[i]}\n{blur_band.shape}', fontsize=12, fontweight='bold')
         ax.axis('off')
         plt.colorbar(im, ax=ax, fraction=0.046)
     
-    plt.suptitle(f'{filename_prefix} - HR vs LR Comparison', fontsize=16, fontweight='bold')
+    plt.suptitle(f'{filename_prefix} - HR vs Blurred (downsampled)', fontsize=16, fontweight='bold')
     plt.tight_layout()
     
     output_path = os.path.join(output_dir, f'{filename_prefix}_comparison.png')
@@ -264,13 +265,13 @@ def main():
     # ========== 配置参数 ==========
     
     # Landsat数据文件夹（NC文件）
-    landsat_dir = r"H:\Landsat\patches_all"  # NC文件目录
+    landsat_dir = r"H:\Landsat\patch_output_nc\patches_denoised"  # NC文件目录
     
     # 模糊核文件路径
-    kernel_path = r"D:\Py_Code\Kernel-Modeling-Super-Resolution\kernelgan_out\kernel_per_band_iter1800.npy"  # 或其他核文件
+    kernel_path = r"output\kernelgan_out_denoised_single_kernel\kernel_per_band_iter2400.npy"  # 或其他核文件
     
     # 输出文件夹
-    output_dir = 'landsat_lr_output'
+    output_dir = r"H:\Landsat\patch_output_nc\patches_denoised_blurred"
     
     # Landsat波段名称（自动生成，无需手动指定）
     
